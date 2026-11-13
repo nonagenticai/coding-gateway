@@ -1,0 +1,146 @@
+[project]
+name = "coding-gateway"
+version = "1.0.0"
+license = { text = "Apache-2.0" }
+description = "API Gateway for coding microservices - routing, health, metrics, cache, validation, graphs, jobs"
+authors = [{name = "Nonagentic", email = "dev@nonagentic.ai"}]
+requires-python = ">=3.14"
+dependencies = [
+    "coding-client>=1.16.0",  # >=1.14.0: `tenant_license_verified` — we lend our licence only to a tenant WE verified. >=1.13.0: `tenant_vouched` distinguishes a vouched tenant from an agreeing one. >=1.10.1: AuthMiddleware introspects the licence Bearer, so TRUST_TENANT_HEADER=false hardens instead of 401ing everything
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.35.0",
+    "gunicorn>=23.0.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "httpx>=0.28.0",
+    "websockets>=14.0",
+    "redis>=7.1.0",
+    "structlog>=24.4.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "psycopg[binary,pool]>=3.2.0",
+    # Database migrations (K8s initContainer)
+    "alembic>=1.13.0",
+    # Graph analysis
+    "networkx>=3.4.0",
+    # AST utilities
+    "astor>=0.8.1",
+    # Grammar downloads
+    "aiohttp>=3.14.4",
+    # Kubernetes job management.
+    # CEILING <36 (deferred, 2026-11-06): kubernetes 37.0.1 regenerated its
+    # client with real annotations — create_namespaced_job(body: V1Job) instead
+    # of accepting a plain dict — which turns `uv run ty check src` red with 41
+    # errors across src/services/job_manager.py (dict body, Optional metadata /
+    # status attribute access). The calls still work at runtime; the fix is to
+    # build V1Job/V1ObjectMeta objects or cast at the ~10 call sites, which is
+    # beyond a dependency bump. Raise the ceiling when that refactor lands.
+    "kubernetes>=31.0.0,<36",
+    # OpenTelemetry
+    "opentelemetry-api>=1.45.1",  # CVE-2026-114603 fixed in 1.45.1 (#101)
+    "opentelemetry-sdk>=1.24.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.24.0",
+    "opentelemetry-instrumentation-fastapi>=0.53b1",
+    "opentelemetry-instrumentation-httpx>=0.53b1",
+    # System metrics (CPU, memory, disk, network)
+    "psutil>=7.0.0",
+    # Security floor: pin pyasn1 ≥ 0.6.4 for PYSEC-2026-3455/3456/3457.
+    # Transitive (pyasn1-modules ← google-auth); floored here because the
+    # archetype's pip-audit gate is repo-scoped.
+    "pyasn1>=0.6.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff==0.15.14",
+    "ty==0.0.39",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff==0.15.14",
+    "detect-secrets",
+    "pip-audit>=2.10.0",
+    "ty==0.0.39",
+    # PYSEC-2026-3721: pip 26.1.2 is vulnerable (transitive via pip-audit -> pip-api -> pip); explicit floor so a re-lock cannot regress
+    "pip>=26.2",
+]
+
+[tool.uv]
+# Security constraints for transitive packages this service never imports directly,
+# kept at/above the patched release via a uv constraint (not a direct dependency):
+#  - aiohttp 3.14.1: CVE-2026-59881 / -69243 / -69244, fix 3.14.3
+#  - cryptography 49.0.0: CVE-2026-69247, fix 50.0.0
+# Freshly-published 2026 advisories, pre-existing on main (last main run 2026-07-30)
+# — the pip-audit gate went red fleet-wide, not because of the coding-client bump.
+constraint-dependencies = [
+    "aiohttp>=3.14.4",
+    "cryptography>=50.0.0",
+    # transitive via coding-client; 1.107.7 clears CVE-2026-107287..107295 (8 advisories, all fixed in the 1.107.x line)
+    "pydantic-ai>=1.107.7",
+    "pydantic-ai-slim>=1.107.7",
+    # 2026-10-25 pip-audit (#101): fastmcp GHSA-7xgj-8392-5q4r (fix 3.4.10), filelock
+    # CVE-2026-112907/112913/112940 (fix 4.2.1), opentelemetry-api CVE-2026-114603 (fix 1.45.1;
+    # floored in [project].dependencies since the gateway imports it directly).
+    "fastmcp>=3.4.10",
+    "filelock>=4.2.1",
+    # otel-api 1.45.1 drags otel-semantic-conventions to ==0.66b1, which mistralai <=2.9.0
+    # caps at <0.61; left free, uv jumps mistralai 2->3 (httpx -> httpx2 rewrite). The
+    # gateway never imports mistralai (transitive via coding-client -> pydantic-ai[mistral];
+    # coding-client only uses the OpenAI provider). 2.9.4 lifts the semconv cap, so hold 2.x.
+    "mistralai<3",
+]
+
+[tool.uv.sources]
+coding-client = { git = "https://github.com/nonagenticai/coding-client", rev = "f7f25b4e81fe4390586108a7a731608dacf462fd" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.ty.environment]
+python-version = "3.14"
+
+[tool.ty.rules]
+unresolved-import = "ignore"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-v --cov=src --cov-report=term-missing --cov-fail-under=85 -m 'not integration'"
+markers = [
+    "integration: marks tests as integration tests",
+    "e2e: marks tests as end-to-end tests",
+]
+
+[tool.coverage.run]
+source = ["src"]
+concurrency = ["greenlet", "thread"]
+
+[tool.coverage.report]
+fail_under = 85
+
+[tool.bandit]
+# B108: the flagged paths are overridable cache-dir *defaults* — settings.temp_dir
+# (default "/tmp/code-graph-helper") and grammar_manager's cache_dir (env TEMP_DIR,
+# default "/tmp/code_graph") — not insecure tempfile creation. Accepted risk, matches
+# the rest of the coding/ fleet. The MD5 call sites are fixed inline with
+# usedforsecurity=False (non-security cache keys / graph IDs), so no B324 skip.
+skips = ["B108"]
