@@ -1,5 +1,9 @@
 # coding-gateway
 
+[![CI](https://github.com/nonagenticai/coding-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/nonagenticai/coding-gateway/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nonagenticai/coding-gateway)](https://github.com/nonagenticai/coding-gateway/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 API gateway for the Code Graph Helper microservices platform. Routes requests to seven backend services while owning graph storage, code validation, cache management, grammar lifecycle, visualization, metrics, and Kubernetes job orchestration directly.
 
 ## What Code Graph Helper Does
@@ -16,7 +20,7 @@ Code Graph Helper is a platform that turns source code into structured, queryabl
 6. **Reason** — `coding-ai` uses PydanticAI agents (OpenAI, Anthropic, Groq) to generate code insights, analyze test failures with fix suggestions, and predict test suite health.
 7. **Stream** — `coding-realtime` pushes live parse results and analysis events to IDE clients over WebSocket.
 
-All services authenticate via Istio-forwarded headers (`x-user-id`, `x-tenant-id`) with trusted-network bypass for internal traffic. External users get license tokens validated via `licenses.licenses.svc.cluster.local:8544/license/introspect`.
+All services authenticate via Istio-forwarded headers (`x-user-id`, `x-tenant-id`) with trusted-network bypass for internal traffic. External users get license tokens validated via `licenses:8544/license/introspect`.
 
 ### Service Map
 
@@ -109,7 +113,7 @@ All auth logic lives in the `coding-client` shared library.
 **`require_tenant`** dependency (`coding_client.auth.tenant`) extracts tenant ID with this priority:
 
 1. `X-Tenant-Id` header (set by Istio ext_authz or gateway proxy)
-2. `Authorization: Bearer <token>` -- license token introspection via `licenses.licenses.svc.cluster.local:8544/license/introspect`
+2. `Authorization: Bearer <token>` -- license token introspection via `licenses:8544/license/introspect`
 3. `request.state.user.effective_tenant_id` (set by AuthMiddleware)
 4. Trusted-network bypass with `DEFAULT_TENANT_ID`
 
@@ -350,7 +354,7 @@ Additional env vars consumed by `coding-client` auth (not in `settings.py`):
 - **Redis** -- Application cache
 - **7 backend microservices** -- Proxied through the gateway
 - **Kubernetes API** -- Job creation and monitoring
-- **License introspection** -- `licenses.licenses.svc.cluster.local:8544` (tenant resolution from Bearer tokens)
+- **License introspection** -- `licenses:8544` (tenant resolution from Bearer tokens)
 
 ## Development
 
@@ -376,3 +380,19 @@ Database migrations are managed by Alembic and run via a K8s initContainer befor
 GitHub Actions workflow: `ruff + ty → build amd64 → smoke test → push`
 
 Image pushed to `ghcr.io/nonagenticai/coding-gateway:sha-<commit>` and tagged `:latest` on success. Flux auto-deploys to K3s.
+
+## Security
+
+Report vulnerabilities privately through the repository's Security tab — see
+[`SECURITY.md`](SECURITY.md). Do not open a public issue for a security problem.
+
+## Contributing
+
+Issues and pull requests are welcome. See
+[`CONTRIBUTING.md`](https://github.com/nonagenticai/.github/blob/main/CONTRIBUTING.md) for the
+organisation-wide rules; setup, test and lint commands are in this README. Commits carry DCO
+sign-off.
+
+## License
+
+Apache-2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
