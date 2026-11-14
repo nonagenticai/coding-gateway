@@ -34,7 +34,7 @@ dependencies = [
     # status attribute access). The calls still work at runtime; the fix is to
     # build V1Job/V1ObjectMeta objects or cast at the ~10 call sites, which is
     # beyond a dependency bump. Raise the ceiling when that refactor lands.
-    "kubernetes>=31.0.0,<36",
+    "kubernetes>=31.0.0,<38",
     # OpenTelemetry
     "opentelemetry-api>=1.45.1",  # CVE-2026-114603 fixed in 1.45.1 (#101)
     "opentelemetry-sdk>=1.24.0",
