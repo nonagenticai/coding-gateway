@@ -1,5 +1,10 @@
 version: 2
 
+# Re-validated 2026-11-14: coding-client is consumed from git at an exact rev
+# (pyproject [tool.uv.sources]) and the pydantic-ai ceilings that made every proposed
+# upgrade unsatisfiable were lifted. Dependabot only recomputes on a dependabot.yml change
+# or its weekly schedule, so the record stops showing jobs created before that change.
+
 # Dependabot replaces the org's private Renovate preset: a public repository cannot inherit a
 # preset hosted in a private one.
 updates:

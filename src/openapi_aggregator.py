@@ -318,14 +318,14 @@ async def get_aggregated_spec(gateway_spec: dict) -> dict:
         tasks = {name: _fetch_spec(client, name, url) for name, url in backends.items()}
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
         for name, result in zip(tasks.keys(), results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.warning("Backend %s raised exception: %s", name, result)
                 failed.append(name)
                 continue
             if result:
-                _merge_spec(merged, name, result, path_origin)  # ty: ignore[invalid-argument-type]
+                _merge_spec(merged, name, result, path_origin)
                 succeeded.append(name)
-                logger.info("Merged %d paths from %s", len(result.get("paths", {})), name)  # ty: ignore[unresolved-attribute]
+                logger.info("Merged %d paths from %s", len(result.get("paths", {})), name)
             else:
                 failed.append(name)
 

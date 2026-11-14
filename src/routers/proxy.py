@@ -88,7 +88,7 @@ PROXY_ROUTES: dict[str, str] = {
 }
 
 # Sorted by longest prefix first so more specific routes match before general ones
-_SORTED_PREFIXES: list[str] = sorted(PROXY_ROUTES.keys(), key=len, reverse=True)  # type: ignore[invalid-assignment]  # ty: ignore[invalid-assignment]
+_SORTED_PREFIXES: list[str] = sorted(PROXY_ROUTES.keys(), key=len, reverse=True)  # type: ignore[invalid-assignment]
 
 
 # ---------------------------------------------------------------------------

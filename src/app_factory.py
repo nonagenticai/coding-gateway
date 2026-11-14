@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         print("[startup] Database migrations handled by K8s initContainer", flush=True)
 
         # Initialize lightweight state
-        app.state.background_tasks: set = set()
+        app.state.background_tasks = set()
 
         # Initialize cache manager
         from services.cache_manager import get_cache_manager

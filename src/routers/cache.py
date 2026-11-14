@@ -1148,8 +1148,8 @@ async def compare_container_caches(
                 "outliers": {},
             },
             "summary": {
-                "total_size_mb": sum(c["size_mb"] for c in containers),
-                "total_entries": sum(c["entry_count"] for c in containers),
+                "total_size_mb": sum(float(c["size_mb"]) for c in containers),
+                "total_entries": sum(int(c["entry_count"]) for c in containers),
             },
         }
 
