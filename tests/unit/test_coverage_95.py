@@ -1528,15 +1528,17 @@ class TestJobManagerDeep:
             {"pytest_args": ["-v", "--tb=short"]}, timeout_seconds=120, tenant_id="n8n-dev"
         )
 
-        assert manifest["kind"] == "Job"
-        assert manifest["spec"]["activeDeadlineSeconds"] == 120
-        containers = manifest["spec"]["template"]["spec"]["containers"]
-        assert containers[0]["args"] == ["-v", "--tb=short"]
+        assert manifest.kind == "Job"
+        assert manifest.api_version == "batch/v1"
+        assert manifest.metadata.generate_name == "pytest-job-"
+        assert manifest.spec.active_deadline_seconds == 120
+        containers = manifest.spec.template.spec.containers
+        assert [container.args for container in containers] == [["-v", "--tb=short"]]
 
     def test_build_job_manifest_default_timeout(self):
         mgr = self._make_job_manager()
         manifest = mgr._build_job_manifest({"pytest_args": []}, tenant_id="n8n-dev")
-        assert manifest["spec"]["activeDeadlineSeconds"] == mgr.DEFAULT_TIMEOUT_SECONDS
+        assert manifest.spec.active_deadline_seconds == mgr.DEFAULT_TIMEOUT_SECONDS
 
     async def test_job_exists_true(self):
         mgr = self._make_job_manager()

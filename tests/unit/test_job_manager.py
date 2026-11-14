@@ -338,17 +338,17 @@ class TestBuildJobManifest:
         manifest = manager._build_job_manifest(
             {"pytest_args": ["-x", "--tb=short"]}, tenant_id="n8n-dev"
         )
-        assert manifest["apiVersion"] == "batch/v1"
-        assert manifest["kind"] == "Job"
-        container = manifest["spec"]["template"]["spec"]["containers"][0]
-        assert container["command"] == ["pytest"]
-        assert "-x" in container["args"]
+        assert manifest.api_version == "batch/v1"
+        assert manifest.kind == "Job"
+        container = manifest.spec.template.spec.containers[0]
+        assert container.command == ["pytest"]
+        assert "-x" in container.args
 
     def test_custom_timeout(self, manager):
         manifest = manager._build_job_manifest(
             {"pytest_args": []}, timeout_seconds=120, tenant_id="n8n-dev"
         )
-        assert manifest["spec"]["activeDeadlineSeconds"] == 120
+        assert manifest.spec.active_deadline_seconds == 120
 
 
 # ── wait_for_completion ───────────────────────────────────────────────

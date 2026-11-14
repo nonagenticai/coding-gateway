@@ -15,6 +15,17 @@ from datetime import UTC, datetime
 from typing import Any
 
 from kubernetes import client, config
+from kubernetes.client import (
+    V1Container,
+    V1EnvVar,
+    V1Job,
+    V1JobSpec,
+    V1JobStatus,
+    V1ObjectMeta,
+    V1PodSpec,
+    V1PodTemplateSpec,
+    V1ResourceRequirements,
+)
 from kubernetes.client.rest import ApiException
 
 from config.settings import get_settings
@@ -64,6 +75,31 @@ def job_owned_by(job: Any, tenant_id: str) -> bool:
     if labels.get(APP_LABEL_KEY) != APP_LABEL_VALUE:
         return False
     return labels.get(TENANT_LABEL_KEY) == tenant_label_value(tenant_id)
+
+
+def _status_of(job: V1Job) -> V1JobStatus:
+    """The job's status, or an empty one when the API response omits ``status``.
+
+    ``status`` is optional in the Kubernetes schema (a Job is created without
+    one), so every read of ``active`` / ``succeeded`` / ``completion_time``
+    goes through here instead of assuming the attribute exists.
+    """
+    return job.status if job.status is not None else V1JobStatus()
+
+
+def _name_of(job: V1Job) -> str | None:
+    """The job's name, or None when the object carries no metadata."""
+    return job.metadata.name if job.metadata is not None else None
+
+
+def _is_active(job: V1Job) -> bool:
+    """True when the job has not completed: live pods, or no completion time yet.
+
+    An absent status means the Job has not reported yet, which is the same as
+    "not completed" — the behaviour ``not status.completion_time`` had before.
+    """
+    status = _status_of(job)
+    return bool(status.active) or status.completion_time is None
 
 
 class KubernetesJobManager:
@@ -159,7 +195,9 @@ class KubernetesJobManager:
         try:
             # Create the job
             result = self.batch_v1.create_namespaced_job(namespace=self.namespace, body=job)
-            job_name = result.metadata.name
+            job_name = _name_of(result)
+            if job_name is None:
+                raise RuntimeError("Kubernetes created the job but returned no job name")
             logger.info(f"Created pytest job: {job_name}")
             return job_name
 
@@ -187,25 +225,26 @@ class KubernetesJobManager:
                 return None
 
             # Determine status
-            if job.status.succeeded and job.status.succeeded > 0:
+            job_status = _status_of(job)
+            if job_status.succeeded and job_status.succeeded > 0:
                 status = "succeeded"
-            elif job.status.failed and job.status.failed > 0:
+            elif job_status.failed and job_status.failed > 0:
                 status = "failed"
-            elif job.status.active and job.status.active > 0:
+            elif job_status.active and job_status.active > 0:
                 status = "running"
             else:
                 status = "pending"
 
             return {
                 "status": status,
-                "active": job.status.active or 0,
-                "succeeded": job.status.succeeded or 0,
-                "failed": job.status.failed or 0,
+                "active": job_status.active or 0,
+                "succeeded": job_status.succeeded or 0,
+                "failed": job_status.failed or 0,
                 "start_time": (
-                    job.status.start_time.isoformat() if job.status.start_time else None
+                    job_status.start_time.isoformat() if job_status.start_time else None
                 ),
                 "completion_time": (
-                    job.status.completion_time.isoformat() if job.status.completion_time else None
+                    job_status.completion_time.isoformat() if job_status.completion_time else None
                 ),
             }
 
@@ -236,13 +275,17 @@ class KubernetesJobManager:
 
             logs = []
             for pod in pods.items:
+                pod_name = pod.metadata.name if pod.metadata is not None else None
+                if not pod_name:
+                    logger.warning("Skipping a pod with no name while reading job logs")
+                    continue
                 try:
                     pod_log = self.core_v1.read_namespaced_pod_log(
-                        name=pod.metadata.name, namespace=self.namespace
+                        name=pod_name, namespace=self.namespace
                     )
-                    logs.append(f"--- Pod: {pod.metadata.name} ---\n{pod_log}\n")
+                    logs.append(f"--- Pod: {pod_name} ---\n{pod_log}\n")
                 except ApiException as e:
-                    logs.append(f"[Error reading logs from {pod.metadata.name}: {e}]\n")
+                    logs.append(f"[Error reading logs from {pod_name}: {e}]\n")
 
             return "".join(logs) or "[No logs available]"
 
@@ -316,16 +359,19 @@ class KubernetesJobManager:
                 namespace=self.namespace, label_selector=tenant_selector(tenant_id)
             )
 
-            active_jobs = []
+            active_jobs: list[str] = []
             for job in jobs.items:
                 # Belt and braces: the selector already scoped the list, but a
                 # list returned by anything other than a real apiserver (or a
                 # future edit that drops the selector) must still not leak.
                 if not job_owned_by(job, tenant_id):
                     continue
+                job_name = _name_of(job)
+                if job_name is None:
+                    continue
                 # A job is active if it has active pods or hasn't completed
-                if job.status.active or (not job.status.completion_time):
-                    active_jobs.append(job.metadata.name)
+                if _is_active(job):
+                    active_jobs.append(job_name)
 
             return active_jobs
 
@@ -344,9 +390,7 @@ class KubernetesJobManager:
             jobs = self.batch_v1.list_namespaced_job(
                 namespace=self.namespace, label_selector=f"{APP_LABEL_KEY}={APP_LABEL_VALUE}"
             )
-            return sum(
-                1 for job in jobs.items if job.status.active or (not job.status.completion_time)
-            )
+            return sum(1 for job in jobs.items if _is_active(job))
         except ApiException as e:
             logger.error(f"Failed to count active jobs: {e}")
             raise
@@ -392,7 +436,7 @@ class KubernetesJobManager:
         timeout_seconds: int | None = None,
         *,
         tenant_id: str,
-    ) -> dict[str, Any]:
+    ) -> V1Job:
         """
         Build a Kubernetes Job manifest for pytest execution.
 
@@ -401,7 +445,7 @@ class KubernetesJobManager:
             timeout_seconds: Optional timeout override
 
         Returns:
-            Kubernetes Job manifest dictionary
+            The typed Kubernetes Job to send to the API
         """
         if timeout_seconds is None:
             timeout_seconds = self.DEFAULT_TIMEOUT_SECONDS
@@ -419,42 +463,42 @@ class KubernetesJobManager:
             TENANT_LABEL_KEY: tenant_label_value(tenant_id),
         }
 
-        return {
-            "apiVersion": "batch/v1",
-            "kind": "Job",
-            "metadata": {
-                "generateName": "pytest-job-",
-                "namespace": self.namespace,
-                "labels": dict(labels),
-                "annotations": {TENANT_ANNOTATION_KEY: tenant_id.strip()},
-            },
-            "spec": {
-                "ttlSecondsAfterFinished": ttl_seconds,
-                "backoffLimit": self.DEFAULT_BACKOFF_LIMIT,
-                "activeDeadlineSeconds": timeout_seconds,
-                "template": {
-                    "metadata": {"labels": dict(labels)},
-                    "spec": {
-                        "serviceAccountName": "code-graph-helper-sa",
-                        "restartPolicy": "Never",
-                        "containers": [
-                            {
-                                "name": "pytest",
-                                "image": pytest_image,
-                                "imagePullPolicy": "Always",
-                                "command": ["pytest"],
-                                "args": pytest_args,
-                                "resources": {
-                                    "requests": {"memory": "512Mi", "cpu": "500m"},
-                                    "limits": {"memory": "1Gi", "cpu": "1000m"},
-                                },
-                                "env": [{"name": "PYTHONUNBUFFERED", "value": "1"}],
-                            }
+        return V1Job(
+            api_version="batch/v1",
+            kind="Job",
+            metadata=V1ObjectMeta(
+                generate_name="pytest-job-",
+                namespace=self.namespace,
+                labels=dict(labels),
+                annotations={TENANT_ANNOTATION_KEY: tenant_id.strip()},
+            ),
+            spec=V1JobSpec(
+                ttl_seconds_after_finished=ttl_seconds,
+                backoff_limit=self.DEFAULT_BACKOFF_LIMIT,
+                active_deadline_seconds=timeout_seconds,
+                template=V1PodTemplateSpec(
+                    metadata=V1ObjectMeta(labels=dict(labels)),
+                    spec=V1PodSpec(
+                        service_account_name="code-graph-helper-sa",
+                        restart_policy="Never",
+                        containers=[
+                            V1Container(
+                                name="pytest",
+                                image=pytest_image,
+                                image_pull_policy="Always",
+                                command=["pytest"],
+                                args=pytest_args,
+                                resources=V1ResourceRequirements(
+                                    requests={"memory": "512Mi", "cpu": "500m"},
+                                    limits={"memory": "1Gi", "cpu": "1000m"},
+                                ),
+                                env=[V1EnvVar(name="PYTHONUNBUFFERED", value="1")],
+                            )
                         ],
-                    },
-                },
-            },
-        }
+                    ),
+                ),
+            ),
+        )
 
     async def job_exists(self, job_name: str) -> bool:
         """
@@ -487,8 +531,9 @@ class KubernetesJobManager:
         """
         try:
             job = self.batch_v1.read_namespaced_job(name=job_name, namespace=self.namespace)
-            if job.status.completion_time:
-                return job.status.completion_time.isoformat()
+            job_status = _status_of(job)
+            if job_status.completion_time:
+                return job_status.completion_time.isoformat()
             return None
         except ApiException as e:
             logger.error(f"Failed to get completion time: {e}")
@@ -511,20 +556,19 @@ class KubernetesJobManager:
 
             job_list = []
             for job in jobs.items:
+                metadata = job.metadata
+                job_status = _status_of(job)
+                creation_timestamp = metadata.creation_timestamp if metadata is not None else None
                 job_list.append(
                     {
-                        "name": job.metadata.name,
-                        "created": (
-                            job.metadata.creation_timestamp.isoformat()
-                            if job.metadata.creation_timestamp
-                            else None
-                        ),
-                        "active": job.status.active or 0,
-                        "succeeded": job.status.succeeded or 0,
-                        "failed": job.status.failed or 0,
+                        "name": metadata.name if metadata is not None else None,
+                        "created": (creation_timestamp.isoformat() if creation_timestamp else None),
+                        "active": job_status.active or 0,
+                        "succeeded": job_status.succeeded or 0,
+                        "failed": job_status.failed or 0,
                         "completion_time": (
-                            job.status.completion_time.isoformat()
-                            if job.status.completion_time
+                            job_status.completion_time.isoformat()
+                            if job_status.completion_time
                             else None
                         ),
                     }
@@ -558,16 +602,17 @@ class KubernetesJobManager:
 
             for job in jobs.items:
                 # Check if job is completed
-                if job.status.completion_time:
-                    completion_time = job.status.completion_time
-                    age_seconds = (current_time - completion_time).total_seconds()
+                job_status = _status_of(job)
+                job_name = _name_of(job)
+                if job_status.completion_time is None or job_name is None:
+                    continue
+                completion_time = job_status.completion_time
+                age_seconds = (current_time - completion_time).total_seconds()
 
-                    if age_seconds > max_age_seconds:
-                        logger.info(
-                            f"Cleaning up old job {job.metadata.name} (age: {age_seconds}s)"
-                        )
-                        await self._delete_by_name(job.metadata.name)
-                        deleted_count += 1
+                if age_seconds > max_age_seconds:
+                    logger.info(f"Cleaning up old job {job_name} (age: {age_seconds}s)")
+                    await self._delete_by_name(job_name)
+                    deleted_count += 1
 
             logger.info(f"Cleaned up {deleted_count} old jobs")
             return deleted_count
