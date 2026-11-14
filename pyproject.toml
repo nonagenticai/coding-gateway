@@ -89,8 +89,8 @@ constraint-dependencies = [
     "aiohttp>=3.14.4",
     "cryptography>=50.0.0",
     # transitive via coding-client; 1.107.7 clears CVE-2026-107287..107295 (8 advisories, all fixed in the 1.107.x line)
-    "pydantic-ai>=1.107.7",
-    "pydantic-ai-slim>=1.107.7",
+    "pydantic-ai>=2.68.0,<3.0.0",
+    "pydantic-ai-slim>=2.68.0,<3.0.0",
     # 2026-10-25 pip-audit (#101): fastmcp GHSA-7xgj-8392-5q4r (fix 3.4.10), filelock
     # CVE-2026-112907/112913/112940 (fix 4.2.1), opentelemetry-api CVE-2026-114603 (fix 1.45.1;
     # floored in [project].dependencies since the gateway imports it directly).
@@ -104,7 +104,7 @@ constraint-dependencies = [
 ]
 
 [tool.uv.sources]
-coding-client = { git = "https://github.com/nonagenticai/coding-client", rev = "f7f25b4e81fe4390586108a7a731608dacf462fd" }
+coding-client = { git = "https://github.com/nonagenticai/coding-client", rev = "0bbd6fcb3b4e407d199c9cce31d946c82fdb0887" }
 
 [tool.ruff]
 line-length = 100
