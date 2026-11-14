@@ -71,10 +71,10 @@ class FakeBatchV1:
         self._seq = itertools.count(1)
 
     def create_namespaced_job(self, namespace, body):
-        meta = body["metadata"]
-        name = f"{meta['generateName']}{next(self._seq):05d}"
-        job = _obj(name, meta.get("labels", {}), meta.get("annotations"))
-        job.pod_labels = dict(body["spec"]["template"]["metadata"]["labels"])
+        meta = body.metadata
+        name = f"{meta.generate_name}{next(self._seq):05d}"
+        job = _obj(name, meta.labels or {}, meta.annotations)
+        job.pod_labels = dict(body.spec.template.metadata.labels)
         self.jobs[name] = job
         return job
 
