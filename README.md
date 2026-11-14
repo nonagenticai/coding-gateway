@@ -6,6 +6,44 @@
 
 API gateway for the Code Graph Helper microservices platform. Routes requests to seven backend services while owning graph storage, code validation, cache management, grammar lifecycle, visualization, metrics, and Kubernetes job orchestration directly.
 
+| | |
+|---|---|
+| **Runtime** | Python 3.14 · FastAPI · uvicorn |
+| **Depends on** | PostgreSQL 18 (ORM tables), Redis (cache), the seven backend services for proxied routes |
+| **Runs on** | Docker/Kubernetes; `uvicorn` on port 8687 |
+
+## Quick start
+
+```bash
+git clone https://github.com/nonagenticai/coding-gateway.git
+cd coding-gateway
+uv sync
+
+PYTHONPATH=src ENABLE_AUTH=false ENVIRONMENT=development \
+  uv run uvicorn main:app --host 0.0.0.0 --port 8687
+```
+
+```bash
+curl -s http://localhost:8687/health
+# {"status":"ok"}
+```
+
+The gateway boots and serves its own `/health` without PostgreSQL, Redis or any backend.
+Graph CRUD needs `DATABASE_URL` (and the schema created by alembic — see
+[Development](#development)); proxied routes need the backend named in
+[Proxied Routes](#proxied-routes). `ENABLE_AUTH=false` is for this local run only; the
+deployed service enables auth and takes identity from mesh-forwarded headers.
+
+## Usage
+
+```bash
+curl -s http://localhost:8687/
+# service name/version and the docs URL
+```
+
+With `ENABLE_DOCS=true` the Swagger UI is at `/docs` and the aggregated OpenAPI document at
+`/openapi.json`.
+
 ## What Code Graph Helper Does
 
 Code Graph Helper is a platform that turns source code into structured, queryable knowledge graphs. It solves the problem of understanding large, multi-language codebases at scale — how functions call each other, which classes inherit from what, where security vulnerabilities hide, and how architecture actually looks vs. how it was designed.
@@ -107,7 +145,7 @@ All auth logic lives in the `coding-client` shared library.
 
 1. **Dev/test API key** -- In `development`/`testing` environments, `Authorization: Bearer <DEV_API_KEY|TEST_API_KEY>` grants admin access.
 2. **Istio-forwarded headers** -- `x-user-id`, `x-tenant-id`, `x-user-roles`, `x-user-name`, `x-user-email`, `x-organization-id`. These are injected by Istio after ext_authz validation.
-3. **Trusted-network bypass** -- Requests from RFC1918/loopback IPs (configurable via `TRUSTED_CIDRS`) are allowed with `DEFAULT_TENANT_ID`.
+3. **Trusted-network bypass** -- Requests from source IPs inside `TRUSTED_CIDRS` (empty by default — no source IP is trusted until an operator sets it) are allowed with `DEFAULT_TENANT_ID`.
 4. **Reject** -- Untrusted network with no headers returns 401.
 
 **`require_tenant`** dependency (`coding_client.auth.tenant`) extracts tenant ID with this priority:
@@ -291,23 +329,23 @@ All settings are sourced from environment variables (or `.env` file) via `src/co
 | `PORT` | `8687` | Listening port |
 | `ENABLE_AUTH` | `true` | Enable security middleware |
 | `ENABLE_DOCS` | `false` | Enable Swagger/ReDoc |
-| `DEFAULT_TENANT_ID` | `n8n-dev` | Fallback tenant for trusted-network requests |
+| `DEFAULT_TENANT_ID` | *(unset; compose sets `n8n-dev`)* | Fallback tenant for trusted-network requests |
 | `SECRET_KEY` | `change-me-in-production` | Session secret (must change in non-dev environments) |
-| `DATABASE_URL` | `postgresql+psycopg://...pgbouncer:6432/codegraph` | PostgreSQL connection string |
+| `DATABASE_URL` | *(unset)* | PostgreSQL DSN (compose: `postgresql+psycopg://coding:…@pgbouncer:6432/code_graph`) |
 | `DB_CONNECTION_TIMEOUT` | `30` | Connection timeout (seconds) |
 | `DB_STATEMENT_TIMEOUT` | `30000` | Statement timeout (milliseconds) |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis connection string |
-| `ANALYSIS_URL` | `http://coding-analysis:8688` | Backend service URL |
-| `TESTING_URL` | `http://coding-testing:8689` | Backend service URL |
-| `AI_URL` | `http://coding-ai:8690` | Backend service URL |
-| `CONTAINERS_URL` | `http://coding-containers:8691` | Backend service URL |
-| `GITHUB_URL` | `http://coding-github:8692` | Backend service URL |
-| `SECURITY_URL` | `http://coding-security:8693` | Backend service URL |
-| `REALTIME_URL` | `http://coding-realtime:8694` | Backend service URL |
+| `REDIS_URL` | *(unset)* | Redis DSN (compose: `redis://code-graph-redis:6379/0`) |
+| `ANALYSIS_URL` | *(unset)* | Backend service URL (compose: `http://coding-analysis:8688`) |
+| `TESTING_URL` | *(unset)* | Backend service URL (compose: `http://coding-testing:8689`) |
+| `AI_URL` | *(unset)* | Backend service URL (compose: `http://coding-ai:8690`) |
+| `CONTAINERS_URL` | *(unset)* | Backend service URL (compose: `http://coding-containers:8691`) |
+| `GITHUB_URL` | *(unset)* | Backend service URL (compose: `http://coding-github:8692`) |
+| `SECURITY_URL` | *(unset)* | Backend service URL (compose: `http://coding-security:8693`) |
+| `REALTIME_URL` | *(unset)* | Backend service URL (compose: `http://coding-realtime:8694`) |
 | `SHARED_GRAPHS_PATH` | `/data/graphs` | Directory for SQLite graph databases |
 | `TEMP_DIR` | `/tmp/code-graph-helper` | Temporary file directory |
 | `CA_CERT_PATH` | `/etc/ssl/certs/ca-certificates.crt` | CA certificate path |
-| `OTEL_ENDPOINT` | `http://otel-collector:4318` | OpenTelemetry collector |
+| `OTEL_ENDPOINT` | *(unset)* | OpenTelemetry collector (compose: `http://otel-collector:4318`) |
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `LOG_FORMAT` | `json` | Log format (`json` or `text`) |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
@@ -317,7 +355,7 @@ All settings are sourced from environment variables (or `.env` file) via `src/co
 | `JOB_TTL_SECONDS` | `1800` | K8s job TTL after completion (seconds) |
 | `JOB_BACKOFF_LIMIT` | `2` | K8s job retry limit |
 | `JOB_TIMEOUT_SECONDS` | `3600` | K8s job timeout |
-| `PYTEST_IMAGE` | `192.168.1.114:5000/pytest-runner:latest` | Docker image for pytest jobs |
+| `PYTEST_IMAGE` | *(unset)* | Docker image for pytest jobs |
 | `ENABLE_CACHING` | `true` | Feature flag (reserved) |
 | `ENABLE_BACKGROUND_PROCESSING` | `true` | Feature flag (reserved) |
 | `ENABLE_FULL_TEXT_SEARCH` | `true` | Feature flag (reserved) |
@@ -327,7 +365,7 @@ Additional env vars consumed by `coding-client` auth (not in `settings.py`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KUBERNETES_NAMESPACE` | `code-graph-helper` | K8s namespace for job management |
-| `TRUSTED_CIDRS` | `127.0.0.1/32,::1/128,192.168.0.0/16,172.16.0.0/12,10.0.0.0/8` | Trusted network CIDRs for auth bypass |
+| `TRUSTED_CIDRS` | *(empty — no source IP is trusted)* | Comma-separated CIDRs admitted without credentials |
 | `DEV_API_KEY` | (empty) | API key for dev mode auth |
 | `TEST_API_KEY` | (empty) | API key for test mode auth |
 ## Dependencies
@@ -363,7 +401,7 @@ Additional env vars consumed by `coding-client` auth (not in `settings.py`):
 uv sync --dev
 
 # Run locally
-uv run uvicorn src.main:app --host 0.0.0.0 --port 8687 --reload
+PYTHONPATH=src uv run uvicorn main:app --host 0.0.0.0 --port 8687 --reload
 
 # Run tests
 uv run pytest
@@ -373,7 +411,17 @@ uv run ruff check src/ tests/
 uv run ty check src/
 ```
 
-Database migrations are managed by Alembic and run via a K8s initContainer before the gateway starts.
+`PYTHONPATH=src` is required because the app imports its modules as top-level packages
+(`main`, `app_factory`, …), exactly as the Docker image does.
+
+Database migrations are managed by Alembic and run via a K8s initContainer before the gateway
+starts in the cluster. Locally, point `DATABASE_URL` at a PostgreSQL 18 database and run them
+yourself:
+
+```bash
+DATABASE_URL=postgresql+psycopg://codegraph:codegraph@127.0.0.1:5432/codegraph \
+  PYTHONPATH=src uv run alembic upgrade head
+```
 
 ## CI/CD
 
@@ -383,8 +431,10 @@ Image pushed to `ghcr.io/nonagenticai/coding-gateway:sha-<commit>` and tagged `:
 
 ## Security
 
-Report vulnerabilities privately through the repository's Security tab — see
-[`SECURITY.md`](SECURITY.md). Do not open a public issue for a security problem.
+Report vulnerabilities privately through this repository's Security tab ("Report a
+vulnerability"). Do not open a public issue for a security problem. This repository does not
+ship a `SECURITY.md`; private reporting is handled by GitHub's repository security advisory
+flow.
 
 ## Contributing
 
@@ -409,4 +459,4 @@ enforcement point). Neither is required to run this code.
 
 ## License
 
-Apache-2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Apache-2.0 — see [`LICENSE`](LICENSE).
