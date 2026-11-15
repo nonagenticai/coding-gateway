@@ -72,13 +72,13 @@ import logging
 import os
 import posixpath
 import re
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth.dependencies import require_tenant
+from config.settings import get_settings
 from services.architecture_rules import evaluate_architecture
 from services.code_graph.consistency_checker import CodeConsistencyChecker
 from services.code_graph.reference_validator import (
@@ -655,29 +655,56 @@ def _no_codebase_input(what: str) -> HTTPException:
 def _validate_explicit_path(explicit_path: str) -> str:
     """Validate a caller-supplied codebase directory, or raise HTTPException.
 
-    Kept working on purpose: a caller that legitimately has a path may pass one.
-    What is gone is the *silent default* to a path the caller never named.
+    Kept working on purpose: a caller that legitimately has a path may pass one —
+    but ONLY one that resolves under the configured ``codebase_workspace_root``.
+    With no root configured (the default) every explicit path is refused: the
+    gateway pod carries no repo source, so "nothing configured" must mean "no
+    local reads", never "the whole filesystem".
+
+    ⭐ WHY THIS SHAPE AND NOT ``is_relative_to`` / ``commonpath``. CodeQL's
+    ``py/path-injection`` recognises a path as checked only when it is
+    NORMALIZED first (``os.path.realpath``/``abspath``/``normpath`` — its
+    ``PathNormalization``) and then guarded by a ``str.startswith`` test on the
+    normalised value (its ``SafeAccessCheck``). ``pathlib.Path.is_relative_to``
+    and ``os.path.commonpath`` are not modelled as barriers, which is why the
+    previous forms remained high-severity alerts even though the containment
+    logic was sound. Containment is compared with the root plus the OS
+    separator — path COMPONENTS, so ``/srv/data`` cannot admit ``/srv/data-evil``
+    — and every later use works on the returned normalised path, never on the
+    raw caller string.
     """
     if "\x00" in explicit_path:
         raise HTTPException(
             status_code=400, detail="Invalid codebase path: embedded null character detected"
         )
 
-    normalized_path = os.path.normpath(explicit_path)
-    if normalized_path == os.path.normpath("/") or (
-        len(Path(normalized_path).parts) <= 2 and normalized_path.startswith("/")
-    ):
+    configured_root = get_settings().codebase_workspace_root
+    if not configured_root:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid codebase path: '{explicit_path}' is too broad or shallow.",
+            detail=(
+                "Invalid codebase path: explicit local paths are disabled on this gateway "
+                "(no codebase_workspace_root is configured). Use 'container_name' instead."
+            ),
+        )
+    root = os.path.realpath(configured_root)
+    root_prefix = root if root.endswith(os.sep) else root + os.sep
+
+    resolved = os.path.realpath(explicit_path)
+    if not resolved.startswith(root_prefix):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid codebase path: '{explicit_path}' is outside the configured codebase root."
+            ),
         )
 
-    if not os.path.isdir(explicit_path):
+    if not os.path.isdir(resolved):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid codebase path: '{explicit_path}' is not a directory.",
         )
-    return explicit_path
+    return resolved
 
 
 def _workspace_error(exc: Exception) -> HTTPException:
@@ -773,12 +800,76 @@ _PARAM_CUES = (
     re.compile(r"@param\s+(?:\{[^}]*\}\s*)?([A-Za-z_]\w*)"),
     re.compile(r"\b(?:param(?:eter)?|arg(?:ument)?)s?\s+[`'\"]([A-Za-z_]\w*)[`'\"]", re.I),
 )
-_SECTION_HEADER = re.compile(r"^\s*(Args|Arguments|Parameters|Params)\s*:?\s*$")
-_OTHER_HEADER = re.compile(
-    r"^\s*(Returns?|Yields?|Raises|Examples?|Notes?|Attributes|See Also|Warnings?)\s*:?\s*$"
+_SECTION_HEADER_WORDS = frozenset({"Args", "Arguments", "Parameters", "Params"})
+_OTHER_HEADER_WORDS = frozenset(
+    {
+        "Return",
+        "Returns",
+        "Yield",
+        "Yields",
+        "Raises",
+        "Example",
+        "Examples",
+        "Note",
+        "Notes",
+        "Attributes",
+        "See Also",
+        "Warning",
+        "Warnings",
+    }
 )
-_SECTION_ENTRY = re.compile(r"^\s*\*{0,2}([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*:")
 _IMPLICIT_PARAMS = frozenset({"self", "cls"})
+
+
+def _header_word(line: str) -> str:
+    """The whole-line header word, or ``""`` when *line* is not a header.
+
+    Replaces ``^\\s*(Words?)\\s*:?\\s*$`` with a linear scan: strip the line,
+    drop at most one trailing colon, strip again. O(len(line)) with no
+    backtracking, so a hostile description (megabytes of spaces after
+    ``Args``/``Raises``) cannot make the parse super-linear — the previous
+    regexes were ``py/polynomial-redos`` highs.
+    """
+    word = line.strip()
+    if word.endswith(":"):
+        word = word[:-1].rstrip()
+    return word
+
+
+def _section_entry_name(line: str) -> str | None:
+    """Identifier of a ``*name(params): ...`` section entry, else ``None``.
+
+    Replaces ``^\\s*\\*{0,2}([A-Za-z_]\\w*)\\s*(?:\\([^)]*\\))?\\s*:`` with a
+    single left-to-right scan (linear in the line length). Returns only the
+    captured identifier; whether the line is an entry is exactly "this is not
+    ``None``".
+    """
+    i, n = 0, len(line)
+    while i < n and line[i].isspace():
+        i += 1
+    stars = 0
+    while i < n and line[i] == "*" and stars < 2:
+        i += 1
+        stars += 1
+    if i < n and line[i] == "*":  # a third '*' is not in `\*{0,2}`
+        return None
+    if i >= n or not (line[i].isascii() and (line[i].isalpha() or line[i] == "_")):
+        return None
+    start = i
+    i += 1
+    while i < n and (line[i].isalnum() or line[i] == "_"):
+        i += 1
+    name = line[start:i]
+    while i < n and line[i].isspace():
+        i += 1
+    if i < n and line[i] == "(":
+        close = line.find(")", i + 1)
+        if close == -1:
+            return None
+        i = close + 1
+        while i < n and line[i].isspace():
+            i += 1
+    return name if i < n and line[i] == ":" else None
 
 
 def _described_parameters(description: str) -> list[str]:
@@ -789,10 +880,11 @@ def _described_parameters(description: str) -> list[str]:
     in_section = False
     entry_indent: int | None = None
     for line in description.splitlines():
-        if _SECTION_HEADER.match(line):
+        header = _header_word(line)
+        if header in _SECTION_HEADER_WORDS:
             in_section, entry_indent = True, None
             continue
-        if _OTHER_HEADER.match(line) or (in_section and not line.strip()):
+        if header in _OTHER_HEADER_WORDS or (in_section and not line.strip()):
             in_section = False
             continue
         if not in_section or set(line.strip()) <= {"-", "="}:
@@ -800,9 +892,10 @@ def _described_parameters(description: str) -> list[str]:
         indent = len(line) - len(line.lstrip())
         # Only lines at the FIRST entry's indentation are entries; a deeper
         # continuation line such as "    Default: 5" is prose, not a parameter.
-        if (m := _SECTION_ENTRY.match(line)) and entry_indent in (None, indent):
+        entry = _section_entry_name(line)
+        if entry is not None and entry_indent in (None, indent):
             entry_indent = indent
-            names.append(m.group(1))
+            names.append(entry)
     return list(dict.fromkeys(n for n in names if n not in _IMPLICIT_PARAMS))
 
 
@@ -1075,6 +1168,11 @@ def _explicit_dir_and_lines(
     """Explicit-path mode: is *file_path* a directory, and how many lines has the file.
 
     Confined to *codebase*: a path that resolves outside it is treated as absent.
+    *codebase* has already been confined to the configured codebase root by
+    ``_validate_explicit_path``; this second containment check closes the
+    symlink case (a link inside the workspace pointing out of it) and keeps the
+    normalise-then-``startswith`` shape CodeQL models as a safe path access —
+    see the ⭐ note in ``_validate_explicit_path``.
     """
     try:
         relative = validate_relative_path(file_path)
@@ -1082,7 +1180,8 @@ def _explicit_dir_and_lines(
         return False, None
     root = os.path.realpath(codebase)
     target = os.path.realpath(os.path.join(root, relative))
-    if os.path.commonpath([root, target]) != root:
+    root_prefix = root if root.endswith(os.sep) else root + os.sep
+    if not target.startswith(root_prefix):
         return False, None
     if not is_file:
         return os.path.isdir(target), None

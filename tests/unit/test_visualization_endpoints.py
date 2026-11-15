@@ -324,6 +324,36 @@ class TestValidateFilePaths:
             _validate_file_paths(["/etc/hostname"])
         assert exc_info.value.status_code == 404
 
+    def test_symlink_escaping_the_root_rejected(self, viz_root, tmp_path_factory):
+        """realpath follows links: a link inside the root pointing out is rejected,
+        so the containment check cannot be bypassed with a symlink."""
+        from fastapi import HTTPException
+
+        from routers.visualization import _validate_file_paths
+
+        outside = tmp_path_factory.mktemp("outside_link_target") / "secret.py"
+        outside.write_text("token = 'x'\n")
+        link = viz_root / "innocent.py"
+        link.symlink_to(outside)
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_file_paths([str(link)])
+        assert exc_info.value.status_code == 404
+
+    def test_prefix_sibling_directory_rejected(self, viz_root):
+        """``<root>-evil`` shares the string prefix but is not under the root:
+        containment is by path component (root + os.sep), never a bare prefix."""
+        from fastapi import HTTPException
+
+        from routers.visualization import _validate_file_paths
+
+        sibling = viz_root.parent / (viz_root.name + "-evil")
+        sibling.mkdir()
+        f = sibling / "leak.py"
+        f.write_text("z = 1\n")
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_file_paths([str(f)])
+        assert exc_info.value.status_code == 404
+
     def test_mixed_inside_outside_keeps_only_contained(self, viz_root):
         from routers.visualization import _validate_file_paths
 

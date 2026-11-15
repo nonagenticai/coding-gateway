@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -282,6 +283,12 @@ def _test_env(monkeypatch):
     monkeypatch.setenv("PUBLIC_SERVER_URL", "https://coding.example.com")
     monkeypatch.setenv("OTEL_ENDPOINT", "http://otel-collector:4318")
     monkeypatch.setenv("PYTEST_IMAGE", "ghcr.io/nonagenticai/pytest-runner:latest")
+    # Explicit codebase paths are confined to a configured root (positive
+    # containment). Tests use pytest's ``tmp_path``, which lives under the
+    # system temp dir, so configuring that as the root keeps the existing
+    # explicit-path tests meaningful without widening the production default
+    # (which stays None = no local reads).
+    monkeypatch.setenv("CODEBASE_WORKSPACE_ROOT", tempfile.gettempdir())
     # Clear the lru_cache so settings reload with test env
     from config.settings import get_settings
 
