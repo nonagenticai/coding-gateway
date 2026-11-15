@@ -434,17 +434,21 @@ class TestResolveCodebasePath:
     """
 
     def test_explicit_path_is_still_honoured(self, tmp_path):
+        import os
+
         from routers.validation import _validate_explicit_path
 
-        assert _validate_explicit_path(str(tmp_path)) == str(tmp_path)
+        # Containment returns the NORMALISED path (the caller's string is never
+        # used again downstream).
+        assert _validate_explicit_path(str(tmp_path)) == os.path.realpath(str(tmp_path))
 
-    def test_explicit_path_must_exist(self):
+    def test_explicit_path_must_exist(self, tmp_path):
         from fastapi import HTTPException
 
         from routers.validation import _validate_explicit_path
 
         with pytest.raises(HTTPException) as exc:
-            _validate_explicit_path("/custom/path")
+            _validate_explicit_path(str(tmp_path / "no-such-codebase"))
         assert exc.value.status_code == 400
         assert "not a directory" in exc.value.detail
 
@@ -457,6 +461,54 @@ class TestResolveCodebasePath:
         with pytest.raises(HTTPException) as exc:
             _validate_explicit_path(bad)
         assert exc.value.status_code == 400
+
+    def test_path_outside_the_configured_root_is_refused(self, monkeypatch, tmp_path):
+        """Positive containment: an existing directory outside the root is 400."""
+        from fastapi import HTTPException
+
+        from config.settings import get_settings
+        from routers.validation import _validate_explicit_path
+
+        monkeypatch.setenv("CODEBASE_WORKSPACE_ROOT", str(tmp_path / "root"))
+        (tmp_path / "root").mkdir()
+        (tmp_path / "outside").mkdir()
+        get_settings.cache_clear()
+        with pytest.raises(HTTPException) as exc:
+            _validate_explicit_path(str(tmp_path / "outside"))
+        assert exc.value.status_code == 400
+        assert "outside the configured codebase root" in exc.value.detail
+
+    def test_no_configured_root_refuses_every_explicit_path(self, monkeypatch, tmp_path):
+        from fastapi import HTTPException
+
+        from config.settings import get_settings
+        from routers.validation import _validate_explicit_path
+
+        monkeypatch.delenv("CODEBASE_WORKSPACE_ROOT", raising=False)
+        get_settings.cache_clear()
+        with pytest.raises(HTTPException) as exc:
+            _validate_explicit_path(str(tmp_path))
+        assert exc.value.status_code == 400
+        assert "explicit local paths are disabled" in exc.value.detail
+
+    def test_symlink_escaping_the_root_is_refused(self, monkeypatch, tmp_path):
+        """realpath follows the link, so a link inside the root pointing out is 400."""
+        from fastapi import HTTPException
+
+        from config.settings import get_settings
+        from routers.validation import _validate_explicit_path
+
+        root = tmp_path / "root"
+        root.mkdir()
+        real = tmp_path / "real-codebase"
+        real.mkdir()
+        (root / "linked").symlink_to(real, target_is_directory=True)
+        monkeypatch.setenv("CODEBASE_WORKSPACE_ROOT", str(root))
+        get_settings.cache_clear()
+        with pytest.raises(HTTPException) as exc:
+            _validate_explicit_path(str(root / "linked"))
+        assert exc.value.status_code == 400
+        assert "outside the configured codebase root" in exc.value.detail
 
     def test_there_is_no_silent_default_anymore(self):
         """Regression guard: re-introducing either name brings the defect back."""

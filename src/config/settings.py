@@ -189,6 +189,20 @@ class Settings(BaseMicroserviceSettings):
             "None (default) disables all local-FS reads."
         ),
     )
+    # Positive-containment root for the validation endpoints' explicit
+    # ``codebase_path`` (routers/validation.py). A caller-supplied codebase is
+    # accepted ONLY when it resolves (symlinks followed) to a location under
+    # this directory; None (the default) rejects every explicit path. Same
+    # rationale as ``visualization_workspace_root``: the gateway pod carries no
+    # repo source, so "no root configured" must mean "no local reads", never
+    # "the whole filesystem is fair game".
+    codebase_workspace_root: str | None = Field(
+        default=None,
+        description=(
+            "Absolute directory the validation endpoints' explicit codebase_path "
+            "must resolve under; None (default) rejects every explicit path."
+        ),
+    )
 
     # ── Observability ─────────────────────────────────────────────────
     otel_endpoint: str = Field(default="")

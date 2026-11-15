@@ -8,6 +8,7 @@ and architectural diagrams.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -164,34 +165,44 @@ def _validate_file_paths(file_paths: list[str]) -> list[Path]:
     root is rejected. When the root is unset (the default — repo source is
     never present on the gateway pod; parsing is meant to delegate to
     coding-analysis), EVERY path is rejected and the endpoint honestly 404s.
+
+    The check is written for the analyser as well as the attacker. CodeQL's
+    ``py/path-injection`` only treats a path as checked when it is NORMALIZED
+    (``os.path.realpath``) and then guarded by a ``startswith`` test on the
+    normalised value (``Concepts.Path.SafeAccessCheck``); ``Path.is_relative_to``
+    and ``os.path.commonpath`` are NOT modelled as barriers, which is why the
+    previous ``Path.resolve()`` + ``is_relative_to`` form kept producing
+    high-severity alerts. Containment is compared with the root plus the OS
+    separator, i.e. by path component, never by a bare string prefix
+    (``/srv/data`` must not admit ``/srv/data-evil``).
     """
     settings = get_settings()
     root_str = settings.visualization_workspace_root
-    allowed_root: Path | None = None
-    if root_str:
-        try:
-            allowed_root = Path(root_str).resolve()
-        except (OSError, ValueError):  # fmt: skip
-            allowed_root = None
+    if not root_str:
+        raise HTTPException(status_code=404, detail="No valid files found")
+    try:
+        allowed_root = os.path.realpath(root_str)
+    except (OSError, ValueError):  # fmt: skip
+        raise HTTPException(status_code=404, detail="No valid files found") from None
+    root_prefix = allowed_root if allowed_root.endswith(os.sep) else allowed_root + os.sep
 
     valid_files = []
     for file_path_str in file_paths:
-        file_path = Path(file_path_str)
         try:
-            resolved = file_path.resolve()
+            candidate = os.path.realpath(file_path_str)
         except (OSError, ValueError):  # fmt: skip
             continue
-        # Positive containment: reject anything not under the allowed root
-        # (and reject everything when no root is configured).
-        if allowed_root is None or not resolved.is_relative_to(allowed_root):
+        # Normalise, then guard the NORMALISED value; everything below uses
+        # *candidate* itself, never the raw caller string.
+        if not candidate.startswith(root_prefix):
             logger.warning(
                 "Rejected path outside the visualization workspace root: %s", file_path_str
             )
             continue
-        if not resolved.exists():
+        if not os.path.exists(candidate):
             logger.warning("File not found: %s", file_path_str)
             continue
-        valid_files.append(resolved)
+        valid_files.append(Path(candidate))
 
     if not valid_files:
         raise HTTPException(status_code=404, detail="No valid files found")

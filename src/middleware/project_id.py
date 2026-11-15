@@ -254,6 +254,13 @@ async def gate_project_id(request: Request) -> JSONResponse | None:
         PROJECT_ID_REFUSED_TOTAL.add(1, attributes)
     except Exception:
         logger.warning("project_id_refused counter failed", exc_info=True)
+    # ``caller`` is a bounded LABEL, never the credential: one of the three
+    # constants above, a configured ``PROJECT_ID_CALLER_LICENCES`` name, or
+    # ``licence:<id>`` where ``licence_caller`` has already stripped everything
+    # but [a-z0-9-] and truncated to 36 chars. The bearer token is only an input
+    # to introspection and is never returned by ``resolve_caller`` (CodeQL's
+    # py/clear-text-logging-sensitive-data alert here is a parameter-name
+    # heuristic false positive — alert 1, dismissed with this evidence).
     logger.info(
         "X-Project-Id refused reason=%s caller=%s path=%s",
         reason,
